@@ -1566,7 +1566,10 @@ const TrayItem = GObject.registerClass({
         }
 
         if (childrenDisplay === 'submenu' && children && children.length > 0) {
-            const subMenu = new PopupMenu.PopupSubMenuMenuItem(label);
+            const wantIcon = this._menuItemHasIcon(properties);
+            const subMenu = new PopupMenu.PopupSubMenuMenuItem(label, wantIcon);
+            if (wantIcon)
+                this._applyMenuItemIcon(properties, subMenu.icon);
             if (!enabled) {
                 subMenu.setSensitive(false);
             }
@@ -1595,6 +1598,7 @@ const TrayItem = GObject.registerClass({
         }
 
         this._applyToggleOrnament(menuItem, properties);
+        this._applyMenuItemIcon(properties, null, menuItem);
 
         menuItem.connect('activate', () => {
             this._activateMenuItem(itemId, label);
@@ -1633,12 +1637,77 @@ const TrayItem = GObject.registerClass({
         }
 
         this._applyToggleOrnament(menuItem, properties);
+        this._applyMenuItemIcon(properties, null, menuItem);
 
         menuItem.connect('activate', () => {
             this._activateMenuItem(itemId, label);
         });
 
         submenu.addMenuItem(menuItem);
+    }
+
+    // True if the DBusMenu properties carry a renderable icon-name or
+    // icon-data field. Used to decide whether a PopupSubMenuMenuItem should
+    // be created with its `wantIcon` slot.
+    _menuItemHasIcon(properties) {
+        if (properties['icon-name']?.deep_unpack())
+            return true;
+        const iconDataVariant = properties['icon-data'];
+        if (!iconDataVariant)
+            return false;
+        try {
+            const raw = iconDataVariant.deep_unpack();
+            return raw && raw.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // Resolve `icon-name` / `icon-data` from DBusMenu item properties and
+    // apply it. Two modes:
+    //   - `targetIcon` passed: an existing St.Icon (e.g. a
+    //     PopupSubMenuMenuItem's `icon` slot) is populated in place.
+    //   - `menuItem` passed: a fresh St.Icon is built and inserted
+    //     immediately before the item's label.
+    // icon-data is a raw 'ay' byte array — DBusMenu spec says it's PNG.
+    _applyMenuItemIcon(properties, targetIcon, menuItem) {
+        const iconName = properties['icon-name']?.deep_unpack();
+        let gicon = null;
+        if (!iconName) {
+            const iconDataVariant = properties['icon-data'];
+            if (iconDataVariant) {
+                try {
+                    const raw = iconDataVariant.deep_unpack();
+                    if (raw && raw.length > 0) {
+                        const bytes = raw instanceof GLib.Bytes
+                            ? raw : GLib.Bytes.new(raw);
+                        gicon = Gio.BytesIcon.new(bytes);
+                    }
+                } catch (e) {
+                    debug(`Failed to decode icon-data for menu item: ${e.message}`);
+                }
+            }
+        }
+
+        if (!iconName && !gicon)
+            return;
+
+        if (targetIcon) {
+            if (iconName)
+                targetIcon.icon_name = iconName;
+            else
+                targetIcon.gicon = gicon;
+            return;
+        }
+
+        const icon = new St.Icon({
+            style_class: 'popup-menu-icon',
+            ...(iconName ? { icon_name: iconName } : { gicon }),
+        });
+        if (menuItem.label && menuItem.contains(menuItem.label))
+            menuItem.insert_child_below(icon, menuItem.label);
+        else
+            menuItem.add_child(icon);
     }
 
     _applyToggleOrnament(menuItem, properties) {
