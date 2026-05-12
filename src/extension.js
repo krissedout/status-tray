@@ -1200,6 +1200,7 @@ const TrayItem = GObject.registerClass({
         if (iconMode !== 'symbolic') {
             this._icon.clear_effects();
             this._icon.set_style(`icon-size: 16px;${iconStyleCss}`);
+            this.emit('display-changed');
             return;
         }
 
@@ -1268,6 +1269,7 @@ const TrayItem = GObject.registerClass({
         }
 
         this._icon.set_style(`icon-size: 16px;${iconStyleCss}`);
+        this.emit('display-changed');
     }
 
     _setIconFromPixmap(pixmapVariant) {
