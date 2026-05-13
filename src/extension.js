@@ -1180,7 +1180,7 @@ const TrayItem = GObject.registerClass({
         this._applySymbolicStyle();
     }
 
-    _applySymbolicStyle() {
+    _applySymbolicStyle(targetIcon = this._icon) {
         const iconName = this._icon.icon_name;
         const isSymbolicIcon = iconName && iconName.endsWith('-symbolic');
         // Only force regular style when we loaded a file via gicon — this
@@ -1196,11 +1196,13 @@ const TrayItem = GObject.registerClass({
         else
             iconStyleCss = '';
 
+        const isPanelIcon = targetIcon === this._icon;
         const iconMode = this._settings?.get_string('icon-mode') ?? 'symbolic';
         if (iconMode !== 'symbolic') {
-            this._icon.clear_effects();
-            this._icon.set_style(`icon-size: 16px;${iconStyleCss}`);
-            this.emit('display-changed');
+            targetIcon.clear_effects();
+            targetIcon.set_style(`icon-size: 16px;${iconStyleCss}`);
+            if (isPanelIcon)
+                this.emit('display-changed');
             return;
         }
 
@@ -1227,7 +1229,7 @@ const TrayItem = GObject.registerClass({
             debug(`Failed to parse effect override for ${this._appId}: ${e.message}`);
         }
 
-        this._icon.clear_effects();
+        targetIcon.clear_effects();
 
         // Symbolic icons (e.g. shield-symbolic) are already monochrome and
         // get recoloured by St.Icon to match the panel theme.  Desaturation
@@ -1237,13 +1239,13 @@ const TrayItem = GObject.registerClass({
         if (!isSymbolicIcon) {
             if (desaturation > 0) {
                 const desaturate = new Clutter.DesaturateEffect({ factor: desaturation });
-                this._icon.add_effect_with_name('desaturate', desaturate);
+                targetIcon.add_effect_with_name('desaturate', desaturate);
             }
 
             const bc = new Clutter.BrightnessContrastEffect();
             bc.set_contrast_full(contrast, contrast, contrast);
             bc.set_brightness_full(brightness, brightness, brightness);
-            this._icon.add_effect_with_name('brightness', bc);
+            targetIcon.add_effect_with_name('brightness', bc);
         }
 
         if (useTint && tintColor) {
@@ -1262,14 +1264,15 @@ const TrayItem = GObject.registerClass({
                 }
                 const colorize = new Clutter.ColorizeEffect();
                 colorize.set_tint(color);
-                this._icon.add_effect_with_name('tint', colorize);
+                targetIcon.add_effect_with_name('tint', colorize);
             } catch (e) {
                 debug(`Failed to apply tint effect: ${e.message}`);
             }
         }
 
-        this._icon.set_style(`icon-size: 16px;${iconStyleCss}`);
-        this.emit('display-changed');
+        targetIcon.set_style(`icon-size: 16px;${iconStyleCss}`);
+        if (isPanelIcon)
+            this.emit('display-changed');
     }
 
     _setIconFromPixmap(pixmapVariant) {
@@ -1878,21 +1881,21 @@ class OverflowButton extends PanelMenu.Button {
         subItem.icon.content = null;
         subItem.icon.set_size(-1, -1);
 
+        let sourceApplied = false;
         const gicon = src.get_gicon?.();
         if (gicon) {
             subItem.icon.set_gicon(gicon);
-            return;
-        }
-        if (src.icon_name) {
+            sourceApplied = true;
+        } else if (src.icon_name) {
             subItem.icon.set_icon_name(src.icon_name);
-            return;
-        }
-        // Pixmap-backed icons (Electron/Flatpak apps, IconPixmap fallback) live
-        // on _icon.content as an St.ImageContent — gicon and icon_name are
-        // both null. Clutter.Content is shareable across actors, so mirror it
-        // onto the menu row. Explicit size is required because Clutter.Content
-        // has no intrinsic size when assigned via the content property.
-        if (src.content) {
+            sourceApplied = true;
+        } else if (src.content) {
+            // Pixmap-backed icons (Electron/Flatpak apps, IconPixmap fallback)
+            // live on _icon.content as an St.ImageContent — gicon and icon_name
+            // are both null. Clutter.Content is shareable across actors, so
+            // mirror it onto the menu row. Explicit size is required because
+            // Clutter.Content has no intrinsic size when assigned via the
+            // content property.
             const scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
             const size = 16 * scaleFactor;
             subItem.icon.set({
@@ -1901,9 +1904,19 @@ class OverflowButton extends PanelMenu.Button {
                 height: size,
                 content_gravity: Clutter.ContentGravity.RESIZE_ASPECT,
             });
+            sourceApplied = true;
+        }
+
+        if (!sourceApplied) {
+            subItem.icon.set_icon_name(FALLBACK_ICON_NAME);
             return;
         }
-        subItem.icon.set_icon_name(FALLBACK_ICON_NAME);
+
+        // Mirror the panel icon's symbolic/recolour/effect treatment onto the
+        // row so the overflow popup matches the per-app tuning. Delegates to
+        // the same routine the panel uses; the trayItem reads its own _icon's
+        // properties to decide style/effects.
+        trayItem._applySymbolicStyle?.(subItem.icon);
     }
 
     _refreshRow(trayItem) {
